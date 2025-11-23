@@ -220,7 +220,7 @@ def main(argv):
     # Train the model.
     train_loader, val_loader, test_loader = load_and_preprocess_data(batch_size=FLAGS.batch_size, data_dir=FLAGS.data_dir)
     model = train_model(FLAGS.model_path, FLAGS.batch_size, FLAGS.learning_rate, 
-            FLAGS.epochs, train_loader, val_loader, data_dir, device=device)
+            FLAGS.epochs, train_loader, val_loader, data_dir=FLAGS.data_dir, device=device)
 
     # Check if we should run prediction and exit
     if FLAGS.predict:
