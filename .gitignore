@@ -34,6 +34,9 @@ harness/mnist/__pycache__/
 *.a
 *.lib
 
+# Add pre-built OpenFHE library
+!submission/pre-built-library/libmlp_openfhe.a
+
 # Executables
 *.exe
 *.out

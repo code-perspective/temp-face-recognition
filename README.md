@@ -14,7 +14,7 @@ See https://github.com/openfheorg/openfhe-development#installation.
 To run the workload, clone and install dependencies:
 ```console
 git clone https://github.com/fhe-benchmarking/ml-inference.git
-cd FHE-Benchmarks-ML-Inference
+cd ml-inference
 
 python -m venv bmenv
 source ./bmenv/bin/activate
