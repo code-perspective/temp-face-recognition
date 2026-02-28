@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-utils.py - Scaffolding code for running the submission.
+utils.py - Harness utilities for argument parsing, logging, and results saving.
+
+Provides:
+  - parse_submission_arguments(): CLI argument parsing
+  - ensure_directories():         validate required repo subdirectories
+  - build_submission():           build submission via its build_task.sh
+  - log_step():                   print per-stage elapsed time
+  - log_size():                   print and record directory sizes
+  - log_quality():                record quality metrics (EER, TAR@FAR)
+  - save_run():                   write per-run JSON results to measurements/
 """
 # Copyright 2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,7 +43,7 @@ _bandwidth = {}
 # Global variable to store model quality metrics
 _model_quality = {}
 
-def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int, int, int, bool]:
+def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int, int, int]:
     """
     Get the arguments of the submission. Populate arguments as needed for the workload.
     """
@@ -48,6 +57,8 @@ def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int,
                         help='Random seed for dataset and query generation')
     parser.add_argument('--clrtxt', type=int,
                         help='Specify with 1 if to rerun the cleartext computation')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Number of face pairs to sample (default: size-dependent)')
 
     args = parser.parse_args()
     size = args.size
@@ -56,7 +67,7 @@ def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int,
     clrtxt = args.clrtxt
 
     # Use params.py to get instance parameters
-    params = InstanceParams(size)
+    params = InstanceParams(size, batch_size=args.batch_size)
     return size, params, seed, num_runs, clrtxt
 
 def ensure_directories(rootdir: Path):
@@ -71,22 +82,20 @@ def ensure_directories(rootdir: Path):
 
 def build_submission(script_dir: Path):
     """
-    Build the submission, including pulling dependencies as neeed
+    Build the submission. Fetching dependencies and compiling is 
+    delegated entirely to the submission's build_task.sh.
     """
-    # Clone and build OpenFHE if needed
-    subprocess.run([script_dir/"get_openfhe.sh"], check=True)
-    # CMake build of the submission itself
-    subprocess.run([script_dir/"build_task.sh", "./submission"], check=True)
+    subprocess.run([script_dir / "build_task.sh", "./submission"], check=True)
 
 def log_step(step_num: int, step_name: str, start: bool = False):
-    """ 
-    Helper function to print timestamp after each step with second precision 
+    """
+    Print a timestamped completion message and record elapsed time for a stage.
+    If start=True, records the start time without printing (used for step 0).
     """
     global _last_timestamp
     global _timestamps
     global _timestampsStr
     now = datetime.now()
-    # Format with milliseconds precision
     timestamp = now.strftime("%H:%M:%S")
 
     # Calculate elapsed time if this isn't the first call
@@ -123,7 +132,8 @@ def log_size(path: Path, object_name: str, flag: bool = False, previous: int = 0
     _bandwidth[object_name] = human_readable_size(size)
     return size
 
-def human_readable_size(n: int):
+def human_readable_size(n: int) -> str:
+    """Convert a byte count to a human-readable string (e.g. 1.4G, 358.8K)."""
     for unit in ["B","K","M","G","T"]:
         if n < 1024:
             return f"{n:.1f}{unit}"
@@ -131,6 +141,10 @@ def human_readable_size(n: int):
     return f"{n:.1f}P"
 
 def save_run(path: Path, size: int = 0):
+    """
+    Write per-run timing, bandwidth, and (for batch sizes > 0) quality metrics
+    to a JSON file at the given path.
+    """
     global _timestamps
     global _timestampsStr
     global _bandwidth
@@ -147,47 +161,18 @@ def save_run(path: Path, size: int = 0):
             "total_latency_ms": round(sum(_timestamps.values()), 4),
             "per_stage": _timestampsStr,
             "bandwidth": _bandwidth,
-            "mnist_model_quality" : _model_quality,
+            "model_quality" : _model_quality,
         }, open(path,"w"), indent=2)
 
     print("[total latency]", f"{round(sum(_timestamps.values()), 4)}s")
 
-def calculate_quality(label_file: Path, pred_file: Path, tag: str):
-    """
-    Calculates accuracy by comparing labels line by line.
-    Label file and predictions file should contain one label per line.
-    Logs accuracy metric and prints results.
-    """
-    __, params, __, __, __ = parse_submission_arguments('Generate query for FHE benchmark.')
-
-    label_file = params.get_ground_truth_labels_file()
-    pred_file = params.get_encrypted_model_predictions_file()
-
-    try:
-        # Read expected labels (one per line)
-        labels = label_file.read_text().strip().split('\n')
-        labels = [label.strip() for label in labels if label.strip()]
-
-        # Read result labels (one per line)
-        preds = pred_file.read_text().strip().split('\n')
-        preds = [label.strip() for label in preds if label.strip()]
-
-    except Exception as e:
-        print(f"[harness] failed to read files: {e}")
-        sys.exit(1)
-
-    num_samples = len(preds)
-
-    correct_pred = sum(1 for exp, res in zip(labels, preds) if exp == res)
-    accuracy = correct_pred / num_samples
-    print(f"[harness] {tag}: {accuracy:.4f} ({correct_pred}/{num_samples} correct)")
-    log_quality(correct_pred, num_samples, f"{tag} quality")
-
-
-def log_quality(correct_predictions, total_samples, tag):
+def log_quality(metrics: dict, tag: str):
+    """Store quality metrics returned by calculate_face_metrics() in the global quality dict."""
     global _model_quality
+    if not metrics:
+        return
     _model_quality[tag] = {
-        "correct_predictions": correct_predictions,
-        "total_samples": total_samples,
-        "accuracy": correct_predictions / total_samples if total_samples > 0 else 0
+        "eer":              metrics["eer"],
+        "tar_at_far_1pct":  metrics["tar_far_1_percent"],
+        "tar_at_far_01pct": metrics["tar_far_01_percent"],
     }
