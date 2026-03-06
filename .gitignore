@@ -54,6 +54,9 @@ virtualenv
 datasets/*
 # But keep the folder alive with this one file, since some submissions might have fixed datasets
 !datasets/.gitkeep
+# Face verification benchmark dataset (pre-provided, not generated on the fly)
+!datasets/face_dataset.npy
+!datasets/face_dataset_labels.txt
 
 # Temporary files for loading MNIST data and model training
 harness/mnist/data/*
