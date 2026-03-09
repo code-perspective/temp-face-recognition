@@ -1,10 +1,13 @@
 # Build artefacts
 */build/
+submission/face/build/
 io/
 third_party/
 measurements/
 harness/__pycache__/
 harness/mnist/__pycache__/
+submission/**/__pycache__/
+*.pyc
 
 # Prerequisites
 *.d

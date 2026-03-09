@@ -41,7 +41,7 @@ class InstanceParams:
         if size > LARGE:
             raise ValueError("Invalid instance size")
 
-        default_batch_sizes = [1, 2, 5, 10]
+        default_batch_sizes = [1, 10, 50, 100]
         self.batch_size = batch_size if batch_size is not None else default_batch_sizes[size]
 
     def get_size(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-“””
+"""
 cleartext_impl.py - Cleartext reference for the face verification workload
 using ArcFace (InsightFace).
 
@@ -9,9 +9,9 @@ Used as the plaintext baseline in stage 10 quality comparison.
 
 Usage:  python3 cleartext_impl.py <test_pairs_npz> <output_scores_path>
 
-Input:  test_pairs.npz — keys pair_NNNNN_img0 / pair_NNNNN_img1, each (3, H, W) uint8 RGB
+Input:  test_pairs.npz -- keys pair_NNNNN_img0 / pair_NNNNN_img1, each (3, H, W) uint8 RGB
 Output: one cosine similarity float per line
-“””
+"""
 # Copyright 2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
