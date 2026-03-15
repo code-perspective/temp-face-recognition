@@ -34,7 +34,6 @@ def main():
     tag         = sys.argv[3] if len(sys.argv) > 3 else scores_file.stem
 
     calculate_face_metrics(gt_file, scores_file, tag)
-    sys.exit(0)
 
 
 if __name__ == "__main__":

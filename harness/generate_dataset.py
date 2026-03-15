@@ -39,12 +39,14 @@ def main():
     if not labels_path.exists():
         sys.exit(f"[harness] Error: labels not found: {labels_path}")
 
-    data   = np.load(npy_path, allow_pickle=True)
+    data   = np.load(npy_path, allow_pickle=True)  # object array of (2, C, H, W) pairs
     labels = [int(l.strip()) for l in labels_path.read_text().strip().splitlines() if l.strip()]
 
     if len(data) != len(labels):
         sys.exit(f"[harness] Error: pair count mismatch — "
                  f"npy has {len(data)} pairs, labels has {len(labels)}")
+    if len(data) == 0:
+        sys.exit("[harness] Error: dataset is empty (0 pairs found)")
 
     n_same = sum(labels)
     n_diff = len(labels) - n_same

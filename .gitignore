@@ -1,11 +1,9 @@
 # Build artefacts
 */build/
-submission/face/build/
 io/
 third_party/
 measurements/
 harness/__pycache__/
-harness/mnist/__pycache__/
 submission/**/__pycache__/
 *.pyc
 
@@ -37,9 +35,6 @@ submission/**/__pycache__/
 *.a
 *.lib
 
-# Add pre-built OpenFHE library
-!submission/pre-built-library/libmlp_openfhe.a
-
 # Executables
 *.exe
 *.out
@@ -60,7 +55,3 @@ datasets/*
 # Face verification benchmark dataset (pre-provided, not generated on the fly)
 !datasets/face_dataset.npy
 !datasets/face_dataset_labels.txt
-
-# Temporary files for loading MNIST data and model training
-harness/mnist/data/*
-harness/mnist/mnist_ffnn_model.pth

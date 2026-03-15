@@ -38,9 +38,13 @@ def main():
 
     if not master_npy.exists():
         sys.exit(f"[harness] Error: master dataset not found: {master_npy}")
+    if not master_labels.exists():
+        sys.exit(f"[harness] Error: master labels file not found: {master_labels}")
 
-    data   = np.load(master_npy, allow_pickle=True)
+    data   = np.load(master_npy, allow_pickle=True)  # object array of (2, C, H, W) pairs
     labels = [int(l.strip()) for l in master_labels.read_text().strip().splitlines() if l.strip()]
+    if len(labels) != len(data):
+        sys.exit(f"[harness] Error: labels count ({len(labels)}) does not match dataset size ({len(data)})")
     n_total    = len(data)
     batch_size = params.get_batch_size()
 
@@ -60,10 +64,11 @@ def main():
         arrays[f'pair_{i:05d}_img1'] = pair[1]
     np.savez(out_dir / "test_pairs.npz", **arrays)
     (out_dir / "test_labels.txt").write_text(
-        "\n".join(str(labels[i]) for i in indices)
+        "\n".join(str(labels[i]) for i in indices) + "\n"
     )
 
-    print(f"[harness] Sampled {batch_size} face pairs (seed={seed}) → {out_dir}")
+    seed_str = str(seed) if seed is not None else "random"
+    print(f"[harness] Sampled {batch_size} face pairs (seed={seed_str}) → {out_dir}")
 
 
 if __name__ == "__main__":

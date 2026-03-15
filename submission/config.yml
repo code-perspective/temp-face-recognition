@@ -1,0 +1,10 @@
+cryptoface:
+  ckpt_path:      "submission/checkpoints/backbone-64x64.ckpt"
+  orion_config:   "submission/orion_configs/cryptoface_net4.yml"
+  input_size:     64
+  # L2NormPoly coefficients: a*y^2 + b*y + c ≈ 1/sqrt(y), where y = sum-of-squares of the embedding.
+  # Fitted on CelebA face_dataset.npy (SOS range [108, 505], mean=267, std=76).
+  l2_poly_coeffs: [3.497142e-07, -3.070292e-04, 1.182291e-01]
+  # RAM budget per FHE worker (GB). Workers share the compiled pipeline via CoW,
+  # so only incremental memory counts. Empirically 4-5 workers fit on a 1 TB machine.
+  gb_per_worker: 125

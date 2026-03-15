@@ -50,7 +50,7 @@ class InstanceParams:
 
     # Directory structure methods
     def subdir(self):
-        """Return the submission directory of this repository."""
+        """Return the root directory of this repository."""
         return self.rootdir
 
     def datadir(self):

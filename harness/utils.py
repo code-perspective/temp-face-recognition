@@ -6,10 +6,12 @@ Provides:
   - parse_submission_arguments(): CLI argument parsing
   - ensure_directories():         validate required repo subdirectories
   - build_submission():           build submission via its build_task.sh
+  - run_exe_or_python():          run a stage as Python script or compiled binary
   - log_step():                   print per-stage elapsed time
   - log_size():                   print and record directory sizes
   - log_quality():                record quality metrics (EER, TAR@FAR)
   - save_run():                   write per-run JSON results to measurements/
+  - reset_run_state():            clear accumulated per-run state between runs
 """
 # Copyright 2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -114,6 +116,7 @@ def log_step(step_num: int, step_name: str, start: bool = False):
         _timestamps[step_name] = elapsed_seconds
 
 def log_size(path: Path, object_name: str, flag: bool = False, previous: int = 0):
+    """Print and record the disk size of a directory. If flag=True, subtracts previous bytes."""
     global _bandwidth
     
     # Check if the path exists before trying to calculate size
@@ -132,6 +135,24 @@ def log_size(path: Path, object_name: str, flag: bool = False, previous: int = 0
     _bandwidth[object_name] = human_readable_size(size)
     return size
 
+def run_exe_or_python(base, file_name, *args, check=True):
+    """
+    If {base}/{file_name}.py exists, run it with the current Python interpreter.
+    Otherwise, run {base}/build/{file_name} as a compiled executable.
+    """
+    py  = base / f"{file_name}.py"
+    exe = base / "build" / file_name
+
+    if py.exists():
+        cmd = ["python3", str(py), *args]
+    elif exe.exists():
+        cmd = [str(exe), *args]
+    else:
+        print(f"[harness] Error: neither {py} nor {exe} found")
+        sys.exit(1)
+    subprocess.run(cmd, check=check)
+
+
 def human_readable_size(n: int) -> str:
     """Convert a byte count to a human-readable string (e.g. 1.4G, 358.8K)."""
     for unit in ["B","K","M","G","T"]:
@@ -142,29 +163,26 @@ def human_readable_size(n: int) -> str:
 
 def save_run(path: Path, size: int = 0):
     """
-    Write per-run timing, bandwidth, and (for batch sizes > 0) quality metrics
-    to a JSON file at the given path.
+    Write per-run timing, bandwidth, and (for instance sizes > 0) quality metrics
+    to a JSON file at the given path. Size 0 (single-pair smoke test) omits quality.
     """
     global _timestamps
     global _timestampsStr
     global _bandwidth
     global _model_quality
 
-    if size == 0:
-        json.dump({
-            "total_latency_ms": round(sum(_timestamps.values()), 4),
-            "per_stage": _timestampsStr,
-            "bandwidth": _bandwidth,
-        }, open(path,"w"), indent=2)
-    else:
-        json.dump({
-            "total_latency_ms": round(sum(_timestamps.values()), 4),
-            "per_stage": _timestampsStr,
-            "bandwidth": _bandwidth,
-            "model_quality" : _model_quality,
-        }, open(path,"w"), indent=2)
+    total = round(sum(_timestamps.values()), 4)
+    data = {
+        "total_latency_s": total,
+        "per_stage": _timestampsStr,
+        "bandwidth": _bandwidth,
+    }
+    if size > 0:
+        data["model_quality"] = _model_quality
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
-    print("[total latency]", f"{round(sum(_timestamps.values()), 4)}s")
+    print("[total latency]", f"{total}s")
 
 def log_quality(metrics: dict, tag: str):
     """Store quality metrics returned by calculate_face_metrics() in the global quality dict."""
@@ -176,3 +194,14 @@ def log_quality(metrics: dict, tag: str):
         "tar_at_far_1pct":  metrics["tar_far_1_percent"],
         "tar_at_far_01pct": metrics["tar_far_01_percent"],
     }
+
+def reset_run_state():
+    """
+    Reset per-run accumulated timing, bandwidth, and quality state.
+    Call at the start of each run so that save_run() writes only that run's data.
+    """
+    global _timestamps, _timestampsStr, _bandwidth, _model_quality
+    _timestamps    = {}
+    _timestampsStr = {}
+    _bandwidth     = {}
+    _model_quality = {}

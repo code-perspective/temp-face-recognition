@@ -5,7 +5,7 @@ using ArcFace (InsightFace).
 
 Reads face pairs, runs face detection, alignment, feature extraction and
 computes cosine similarity scores using ArcFace, and writes one score per line.
-Used as the plaintext baseline in stage 10 quality comparison.
+Used as the plaintext baseline in quality comparison.
 
 Usage:  python3 cleartext_impl.py <test_pairs_npz> <output_scores_path>
 
@@ -48,7 +48,9 @@ def get_embedding(app, img_chw_rgb_uint8: np.ndarray) -> np.ndarray:
         img_chw_rgb_uint8:   (3, H, W) uint8 RGB, full-resolution
 
     Returns:
-        1-D float32 embedding vector, or zero vector if no face detected
+        1-D float32 embedding vector, or zero vector if no face detected.
+        A zero vector produces cosine_similarity=0.0, which is treated as a
+        real score and will degrade EER/TAR metrics if face detection fails.
     """
     img = img_chw_rgb_uint8.transpose(1, 2, 0)[:, :, ::-1]  # CHW RGB → HWC BGR
     faces = app.get(img)
@@ -80,7 +82,7 @@ def main():
 
     print(f"[harness] ArcFace cleartext: {n} pairs, loading model...")
     rec = load_arcface()
-    print(f"[harness] Model ready. Computing embeddings...")
+    print("[harness] Model ready. Computing embeddings...")
 
     scores = []
     for i in range(n):
@@ -89,7 +91,7 @@ def main():
         scores.append(cosine_similarity(emb1, emb2))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(f"{s:.6f}" for s in scores))
+    output_path.write_text("\n".join(f"{s:.6f}" for s in scores) + "\n")
     print(f"[harness] ArcFace scores written → {output_path}")
 
 

@@ -41,36 +41,47 @@ def calculate_face_metrics(gt_labels_file: Path, scores_file: Path, tag: str) ->
     labels = [int(l.strip()) for l in Path(gt_labels_file).read_text().strip().splitlines() if l.strip()]
     scores = [float(s.strip()) for s in Path(scores_file).read_text().strip().splitlines() if s.strip()]
 
-    n = min(len(labels), len(scores))
+    if len(labels) != len(scores):
+        raise ValueError(
+            f"[harness] {tag}: label/score count mismatch — "
+            f"{len(labels)} labels vs {len(scores)} scores"
+        )
+    n = len(labels)
+    if n == 0:
+        print(f"[harness] {tag}: no label/score pairs found")
+        return {}
     if n < 2:
         print(f"[harness] {tag}: score={scores[0]:.6f}  label={labels[0]}")
         return {}
 
-    labels = np.array(labels[:n], dtype=bool)
-    scores = np.array(scores[:n], dtype=float)
+    labels = np.array(labels, dtype=bool)
+    scores = np.array(scores, dtype=float)
 
-    # Sweep similarity thresholds: predict same-person when score >= threshold
+    n_pos = int(np.sum(labels))
+    n_neg = len(labels) - n_pos
+
+    # Sweep 2000 similarity thresholds uniformly across the observed score range.
+    # 2000 points gives sub-0.1% resolution on EER, which is sufficient for benchmarking.
     thresholds = np.linspace(scores.min() - 1e-6, scores.max() + 1e-6, 2000)
-    tprs, fprs = [], []
-    for t in thresholds:
+    tprs = np.zeros(len(thresholds))
+    fprs = np.zeros(len(thresholds))
+    for idx, t in enumerate(thresholds):
         pred_same = scores >= t
-        tp = np.sum(pred_same &  labels)
-        fp = np.sum(pred_same & ~labels)
-        fn = np.sum(~pred_same &  labels)
-        tn = np.sum(~pred_same & ~labels)
-        tprs.append(tp / (tp + fn) if (tp + fn) > 0 else 0.0)
-        fprs.append(fp / (fp + tn) if (fp + tn) > 0 else 0.0)
-
-    tprs = np.array(tprs)
-    fprs = np.array(fprs)
+        tp = int(np.sum(pred_same &  labels))
+        fp = int(np.sum(pred_same & ~labels))
+        fn = n_pos - tp
+        tn = n_neg - fp
+        tprs[idx] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        fprs[idx] = fp / (fp + tn) if (fp + tn) > 0 else 0.0
     fnrs = 1.0 - tprs
 
     eer_idx = np.argmin(np.abs(fprs - fnrs))
     eer = float((fprs[eer_idx] + fnrs[eer_idx]) / 2)
 
-    # TAR@FAR=1% and TAR@FAR=0.1%: largest TAR where FPR <= target
-    tar_1pct  = float(tprs[np.searchsorted(-fprs, -0.01,  side='left')])
-    tar_01pct = float(tprs[np.searchsorted(-fprs, -0.001, side='left')])
+    # TAR@FAR=1% and TAR@FAR=0.1%: largest TAR where FPR <= target.
+    # searchsorted can return len(tprs) when all FPRs exceed the target; clamp to avoid IndexError.
+    tar_1pct  = float(tprs[min(np.searchsorted(-fprs, -0.01,  side='left'), len(tprs) - 1)])
+    tar_01pct = float(tprs[min(np.searchsorted(-fprs, -0.001, side='left'), len(tprs) - 1)])
 
     result = {
         "eer":              eer,
