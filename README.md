@@ -8,6 +8,18 @@ Submitters clone this repository and replace the contents of `submission/` with 
 
 ## Prerequisites
 
+### System dependencies
+
+```console
+sudo apt update
+sudo apt install build-essential
+sudo apt install python3-dev
+sudo apt install golang-go
+sudo apt install libgraphviz-dev
+sudo apt install -y libgl1-mesa-glx
+sudo apt install -y libglib2.0-0 libsm6 libxext6 libxrender-dev
+```
+
 ### Python dependencies
 
 ```console
