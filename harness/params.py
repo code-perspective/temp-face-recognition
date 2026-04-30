@@ -33,17 +33,16 @@ def instance_name(size):
 class InstanceParams:
     """Parameters that differ for different instance sizes."""
 
-    def __init__(self, size, rootdir=None):
+    def __init__(self, size, rootdir=None, batch_size=None):
         """Constructor."""
         self.size = size
         self.rootdir = Path(rootdir) if rootdir else Path.cwd()
 
         if size > LARGE:
             raise ValueError("Invalid instance size")
-        
-        batch_size =              [1, 15, 1000, 10000]
 
-        self.batch_size = batch_size[size]
+        default_batch_sizes = [1, 10, 50, 100]
+        self.batch_size = batch_size if batch_size is not None else default_batch_sizes[size]
 
     def get_size(self):
         """Return the instance size."""
@@ -51,7 +50,7 @@ class InstanceParams:
 
     # Directory structure methods
     def subdir(self):
-        """Return the submission directory of this repository."""
+        """Return the root directory of this repository."""
         return self.rootdir
 
     def datadir(self):
@@ -59,7 +58,7 @@ class InstanceParams:
         return self.rootdir / "datasets" / instance_name(self.size)
     
     def dataset_intermediate_dir(self):
-        """Return the intermediate  directory path."""
+        """Return the intermediate directory path."""
         return self.datadir() / "intermediate"
 
     def iodir(self):
@@ -67,7 +66,7 @@ class InstanceParams:
         return self.rootdir / "io" / instance_name(self.size)
 
     def io_intermediate_dir(self):
-        """Return the intermediate  directory path."""
+        """Return the intermediate directory path."""
         return self.iodir() / "intermediate"
 
     def measuredir(self):
@@ -80,7 +79,7 @@ class InstanceParams:
 
     def get_test_input_file(self):
         """Return the test input file path."""
-        return self.dataset_intermediate_dir() / "test_pixels.txt"
+        return self.dataset_intermediate_dir() / "test_pairs.npz"
 
     def get_ground_truth_labels_file(self):
         """Return the ground truth labels file path."""

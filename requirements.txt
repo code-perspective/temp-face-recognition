@@ -1,4 +1,8 @@
 numpy>=1.20
-torch==2.7.0
-torchvision==0.22.0
-absl-py==2.3.0
+# Install CPU-only torch: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+pyyaml
+insightface>=0.7
+onnxruntime>=1.16
+# Install orion (FHE framework): uv pip install git+https://github.com/vboddeti/orion.git
