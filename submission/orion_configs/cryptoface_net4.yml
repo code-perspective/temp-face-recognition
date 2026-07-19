@@ -42,7 +42,8 @@ orion:
                  # so solver must target output≥2 to leave level≥1 for the post-pipeline inner product
 
   fuse_modules: true
-  debug: true
+  # Production evaluation must not decrypt or verify intermediate ciphertexts.
+  debug: false
 
   diags_path: ../data/diagonals.h5  # "path/to/diags" | ""
   keys_path: ../data/keys.h5  # "path/to/keys" | ""

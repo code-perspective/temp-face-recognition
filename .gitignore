@@ -2,10 +2,11 @@
 */build/
 io/
 third_party/
-measurements/
 harness/__pycache__/
 submission/**/__pycache__/
 *.pyc
+network.png
+network-with-levels.png
 
 # Prerequisites
 *.d

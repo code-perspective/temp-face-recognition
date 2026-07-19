@@ -1,29 +1,28 @@
 {
   "Timing": {
-    "Test dataset generation": "0.6003s",
-    "Key Generation": "24.1032s",
-    "Encrypted model preprocessing": "4.7224s",
-    "Input generation": "0.6085s",
-    "Input preprocessing": "10.1325s",
-    "Input encryption": "20.8236s",
-    "Encrypted computation": "2704.3081s",
-    "Result decryption": "17.8276s",
-    "Result postprocessing": "0.0247s",
-    "Harness: Run inference for harness plaintext model": "9.1791s",
-    "Harness: Run quality check": "0.0031s",
-    "Total": "2792.3331s"
+    "Test dataset generation": "0.3032s",
+    "Key Generation": "24.3719s",
+    "Encrypted model preprocessing": "5.8356s",
+    "Input generation": "0.3383s",
+    "Input preprocessing": "15.4165s",
+    "Input encryption": "22.4541s",
+    "Encrypted computation": "1910.4607s",
+    "Result decryption": "18.0024s",
+    "Result postprocessing": "0.0262s",
+    "Total": "1997.2088s"
   },
   "Bandwidth": {
+    "Public and evaluation keys": "9.5M",
     "Encrypted input": "128.0M",
-    "Encrypted results": "1.0M"
+    "Encrypted results": "6.0M"
   },
   "Server Reported": {
-    "Encrypted computation": "1195.4385s",
-    "Total": "2653.3743s"
-  },
-  "additional_measurements": {
-    "Pipeline load and key setup": "1453.0178s",
-    "Encrypted compute (wall clock)": "1195.4385s",
-    "Mean encrypted compute per pair": "1195.4385s"
+    "Encrypted computation": "392.5415s",
+    "Total": "1858.8314s",
+    "Pipeline load and key setup": "1450.8497s",
+    "Backbone forward worker-seconds": "1676.424s",
+    "Normalization worker-seconds": "4.1007s",
+    "Inner product worker-seconds": "0.7667s",
+    "Mean encrypted wall time per pair": "392.5415s"
   }
 }

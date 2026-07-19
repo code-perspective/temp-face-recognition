@@ -39,7 +39,7 @@ def main():
     if not labels_path.exists():
         sys.exit(f"[harness] Error: labels not found: {labels_path}")
 
-    data   = np.load(npy_path, allow_pickle=True)  # object array of (2, C, H, W) pairs
+    data   = np.load(npy_path, allow_pickle=True)  # object array; each pair is [img0, img1]
     labels = [int(l.strip()) for l in labels_path.read_text().strip().splitlines() if l.strip()]
 
     if len(data) != len(labels):
@@ -48,9 +48,18 @@ def main():
     if len(data) == 0:
         sys.exit("[harness] Error: dataset is empty (0 pairs found)")
 
+    # Images are stored as original JPEG bytes (compact) or raw (3, H, W) arrays.
+    example = data[0][0]
+    if isinstance(example, (bytes, bytearray, np.bytes_)):
+        import io
+        from PIL import Image
+        example_shape = np.asarray(Image.open(io.BytesIO(bytes(example))).convert("RGB")).shape
+    else:
+        example_shape = np.asarray(example).shape
+
     n_same = sum(labels)
     n_diff = len(labels) - n_same
-    print(f"[harness] Face dataset: {len(data)} pairs  example_img_shape={data[0][0].shape}  "
+    print(f"[harness] Face dataset: {len(data)} pairs  example_img_shape={example_shape}  "
           f"same={n_same}  diff={n_diff}")
 
 

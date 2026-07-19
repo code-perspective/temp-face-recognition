@@ -1,8 +1,20 @@
-numpy>=1.20
-# Install CPU-only torch: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Harness + CryptoFace reference submission Python dependencies.
+# System (apt) packages: see scripts/install_system_deps.sh
+#
+# Install with: uv pip install --python .venv/bin/python -r requirements.txt
+
+numpy>=1.23.5,<2.3
 torch
 torchvision
 pyyaml
+opencv-python
 insightface>=0.7
-onnxruntime>=1.16
-# Install orion (FHE framework): uv pip install git+https://github.com/vboddeti/orion.git
+h5py
+einops
+multipledispatch
+scipy
+scikit-learn
+onnxruntime-gpu>=1.24.2
+
+# Orion FHE framework (required by the CryptoFace reference submission)
+orion @ git+https://github.com/vboddeti/orion.git@769da444bdaa3e5d5ab99bdde19044777e026d31

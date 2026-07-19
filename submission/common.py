@@ -66,6 +66,22 @@ def parse_stage_args() -> tuple:
     return size, cfg, params
 
 
+def decode_master_image(elem) -> np.ndarray:
+    """Return a (3, H, W) uint8 RGB array from a master-dataset element.
+
+    The master dataset (datasets/face_dataset.npy) stores original JPEG file
+    bytes to keep the committed file small; this decodes those bytes. Raw uint8
+    arrays are passed through unchanged. Mirrors the harness's decode in
+    generate_input._to_chw_uint8 so the fit sample matches per-run inputs.
+    """
+    import io as _io
+    from PIL import Image
+    if isinstance(elem, (bytes, bytearray, np.bytes_)):
+        img = Image.open(_io.BytesIO(bytes(elem))).convert("RGB")
+        return np.asarray(img, dtype=np.uint8).transpose(2, 0, 1)
+    return np.asarray(elem)
+
+
 def align_face(detector, img_chw_rgb: np.ndarray, output_size: int) -> np.ndarray | None:
     """
     Detect and align one face using InsightFace norm_crop, then resize to
@@ -140,10 +156,24 @@ def preprocess_one_image(detector, img_chw_uint8: np.ndarray, input_size: int) -
 
 
 def load_detector():
-    """Load InsightFace FaceAnalysis for face detection and alignment."""
+    """Load InsightFace FaceAnalysis for face detection and alignment.
+
+    Uses the CUDA execution provider when onnxruntime-gpu exposes it (pin the
+    GPU with CUDA_VISIBLE_DEVICES), otherwise falls back to CPU so the submission
+    stays portable on machines without a GPU.
+    """
     from insightface.app import FaceAnalysis
-    app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-    app.prepare(ctx_id=-1)
+    try:
+        import onnxruntime as ort
+        has_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:
+        has_cuda = False
+    if has_cuda:
+        providers, ctx_id = ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
+    else:
+        providers, ctx_id = ["CPUExecutionProvider"], -1
+    app = FaceAnalysis(name='buffalo_l', providers=providers)
+    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
     return app
 
 

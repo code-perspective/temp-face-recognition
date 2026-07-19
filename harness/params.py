@@ -33,7 +33,7 @@ def instance_name(size):
 class InstanceParams:
     """Parameters that differ for different instance sizes."""
 
-    def __init__(self, size, rootdir=None, batch_size=None):
+    def __init__(self, size, rootdir=None):
         """Constructor."""
         self.size = size
         self.rootdir = Path(rootdir) if rootdir else Path.cwd()
@@ -41,8 +41,9 @@ class InstanceParams:
         if size > LARGE:
             raise ValueError("Invalid instance size")
 
-        default_batch_sizes = [1, 10, 50, 100]
-        self.batch_size = batch_size if batch_size is not None else default_batch_sizes[size]
+        # Face-pair counts for the single / small / medium / large variants.
+        batch_sizes = [1, 128, 256, 1024]
+        self.batch_size = batch_sizes[size]
 
     def get_size(self):
         """Return the instance size."""

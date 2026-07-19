@@ -24,10 +24,23 @@ different spatial dimensions across pairs.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import sys
 import numpy as np
 from pathlib import Path
+from PIL import Image
 from utils import parse_submission_arguments
+
+
+def _to_chw_uint8(elem):
+    """Return a (3, H, W) uint8 RGB array from either raw ndarray or encoded
+    image bytes. The master dataset stores original JPEG file bytes to keep the
+    committed file small; per-run test_pairs.npz stays decoded uint8 so the
+    submission contract is unchanged."""
+    if isinstance(elem, (bytes, bytearray, np.bytes_)):
+        img = Image.open(io.BytesIO(bytes(elem))).convert("RGB")
+        return np.asarray(img, dtype=np.uint8).transpose(2, 0, 1)
+    return np.asarray(elem)
 
 
 def main():
@@ -60,8 +73,8 @@ def main():
     arrays = {}
     for i, idx in enumerate(indices):
         pair = data[idx]
-        arrays[f'pair_{i:05d}_img0'] = pair[0]
-        arrays[f'pair_{i:05d}_img1'] = pair[1]
+        arrays[f'pair_{i:05d}_img0'] = _to_chw_uint8(pair[0])
+        arrays[f'pair_{i:05d}_img1'] = _to_chw_uint8(pair[1])
     np.savez(out_dir / "test_pairs.npz", **arrays)
     (out_dir / "test_labels.txt").write_text(
         "\n".join(str(labels[i]) for i in indices) + "\n"

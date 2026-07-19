@@ -14,7 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from common import (
     parse_stage_args,
-    load_detector, preprocess_one_image, init_orion_scheme
+    load_detector, preprocess_one_image, init_orion_scheme,
+    decode_master_image,
 )
 
 
@@ -37,7 +38,8 @@ def main():
     print("[client_key_generation] Loading master dataset for fit sample...", flush=True)
     dataset = np.load(dataset_path, allow_pickle=True)
     # orion.fit() only needs the tensor shape, not specific values; one image is sufficient.
-    img0 = dataset[0][0]  # (3, H, W) uint8 RGB — first image of first pair
+    # Master dataset stores JPEG bytes (see decode_master_image); decode to (3, H, W) uint8 RGB.
+    img0 = decode_master_image(dataset[0][0])  # first image of first pair
 
     print("[client_key_generation] Detecting + aligning face for fit sample...", flush=True)
     detector = load_detector()
