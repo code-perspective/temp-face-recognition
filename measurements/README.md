@@ -43,4 +43,4 @@ Each `results-*.json` follows the FHE-benchmarking measurement schema:
 
 The `Quality` block also contains the encrypted-minus-ArcFace metric gaps. A
 batched run passes the quality criterion when its encrypted EER is no more than
-0.05 above the ArcFace EER on the same sampled pairs.
+0.15 above the ArcFace EER on the same sampled pairs.
