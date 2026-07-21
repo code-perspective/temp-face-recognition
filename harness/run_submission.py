@@ -62,9 +62,20 @@ def main():
     # One RNG seeded once — each run draws a different per-run seed from it.
     rng = np.random.default_rng(seed)
 
+    # Snapshot the one-time artifacts produced by stages 2-3 (keys). Everything
+    # else the submission writes into the IO dir is per-run and must be cleared
+    # between runs: a resumable submission that caches ciphertexts/scores per
+    # pair index would otherwise reuse a previous run's results against the new
+    # run's (different) pairs and labels, producing meaningless metrics.
+    persistent_io = {p.name for p in io_dir.iterdir()}
+
     # Run stages 4-10 once per requested run
     for run in range(num_runs):
         run_path = params.measuredir() / f"results-{run+1}.json"
+        # Reset per-run IO to the post-keygen state so each run is independent.
+        for p in io_dir.iterdir():
+            if p.name not in persistent_io:
+                subprocess.run(["rm", "-rf", str(p)], check=True)
         utils.reset_run_state()
         if num_runs > 1:
             print(f"\n         [harness] Run {run+1} of {num_runs}")
