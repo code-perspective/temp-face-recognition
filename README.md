@@ -17,7 +17,6 @@ Submitters clone this repository and replace the contents of `submission/` with 
 - `golang-go` — required by Orion's build
 - `libgraphviz-dev` — pipeline graph visualization
 - `libgl1-mesa-glx`, `libglib2.0-0`, `libsm6`, `libxext6`, `libxrender-dev` — OpenCV/OpenGL runtime libs (InsightFace)
-- `git-lfs` — pulling the benchmark dataset
 
 ```console
 bash scripts/install_system_deps.sh
@@ -32,22 +31,29 @@ pinned to the revision used by the validated CryptoFace environment.
 bash scripts/install_python_deps.sh
 ```
 
-### Dataset (git-lfs)
+### Dataset and model (Hugging Face)
 
-The benchmark dataset (`datasets/face_dataset.npy`) is stored using git-lfs. Pull it after cloning:
+The benchmark dataset and the reference model checkpoint are hosted on Hugging
+Face and downloaded automatically on the first run (cached under
+`~/.cache/huggingface`). No manual step is required — `huggingface_hub` is
+installed with the Python dependencies above.
 
-```console
-git lfs pull
-```
+| Artifact | Hugging Face repo | Pulled by |
+|---|---|---|
+| `face_dataset.npy` + `face_dataset_labels.txt` | [`halmsu/celeba-1024-pairs`](https://huggingface.co/datasets/halmsu/celeba-1024-pairs) (dataset) | harness `generate_dataset.py` → `datasets/` |
+| `backbone-64x64.ckpt` | [`halmsu/cryptoface-v1`](https://huggingface.co/halmsu/cryptoface-v1) (model) | reference submission `common.load_submission_config` |
 
-The bundled dataset contains 1,024 screened CelebA pairs: 512 genuine and 512
-impostor pairs. It preserves the original variable-size JPEG images. The input
-generator decodes them without resizing, and the reference submission performs
-face detection, landmark alignment, cropping, and only then resizes the aligned
-crop for CryptoFace. The four benchmark variants sample 1, 128, 256, or all
-1,024 pairs from this master set.
+The dataset contains 1,024 screened CelebA pairs: 512 genuine and 512 impostor
+pairs. It preserves the original variable-size JPEG images. The input generator
+decodes them without resizing, and the reference submission performs face
+detection, landmark alignment, cropping, and only then resizes the aligned crop
+for CryptoFace. The four benchmark variants sample 1, 128, 256, or all 1,024
+pairs from this master set.
 
-Set the checkpoint path in `submission/config.yml` before running the reference submission.
+**Offline / local override.** To run without network access, place the two
+dataset files in `datasets/` and the checkpoint at the `ckpt_path` in
+`submission/config.yml` (default `submission/checkpoints/backbone-64x64.ckpt`);
+existing local files are always used in preference to the download.
 
 ## Running the benchmark
 
@@ -96,7 +102,7 @@ The harness drives the following sequence. Stages 2, 3, and 5–9 invoke the sub
 | Stage | Script | Description |
 |-------|--------|-------------|
 | 0 | harness | Remove and re-create `io/<size>/` |
-| 1 | harness | Validate `datasets/face_dataset.npy` |
+| 1 | harness | Download (from Hugging Face if absent) and validate `datasets/face_dataset.npy` |
 | 2 | submission | `client_key_generation` — generate CKKS keys |
 | 3 | submission | `server_preprocess_model` — server preprocessing stub |
 | 4 | harness | `generate_input.py` — sample face pairs into `datasets/<size>/intermediate/` |
@@ -113,7 +119,7 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 
 | Path | Written by | Read by |
 |------|-----------|---------|
-| `datasets/face_dataset.npy` | pre-provided | harness stage 1, 4 |
+| `datasets/face_dataset.npy` | Hugging Face (`halmsu/celeba-1024-pairs`) | harness stage 1, 4 |
 | `datasets/<size>/intermediate/test_pairs.npz` | harness stage 4 | submission stage 5 |
 | `datasets/<size>/intermediate/test_labels.txt` | harness stage 4 | harness stage 10 |
 | `io/<size>/public_keys/keys.h5` | submission stage 2 | submission stages 6, 7, 8 |
@@ -135,12 +141,12 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 │   ├── params.py               # InstanceParams and batch sizes
 │   ├── utils.py                # Logging, timing, run_exe_or_python
 │   ├── metrics.py              # EER and TAR@FAR calculation
-│   ├── generate_dataset.py     # Validate pre-provided dataset
+│   ├── generate_dataset.py     # Download (from HF) + validate dataset
 │   ├── generate_input.py       # Sample face pairs per run
 │   ├── cleartext_impl.py       # ArcFace plaintext reference
 │   └── verify_result.py        # Standalone metric verification
-├── datasets/
-│   ├── face_dataset.npy        # Pre-provided benchmark dataset (git-lfs)
+├── datasets/                   # Populated on first run from HF (halmsu/celeba-1024-pairs)
+│   ├── face_dataset.npy        # Benchmark dataset (1024 CelebA pairs)
 │   └── face_dataset_labels.txt # Ground-truth labels (0=different, 1=same)
 ├── submission/                 # Reference submission (CryptoFace)
 │   ├── config.yml
@@ -154,7 +160,7 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 │   ├── client_postprocess.py
 │   ├── models/
 │   ├── utils/
-│   ├── checkpoints/            # Place backbone-64x64.ckpt here
+│   ├── checkpoints/            # backbone-64x64.ckpt downloaded from HF (halmsu/cryptoface-v1)
 │   └── orion_configs/
 ├── scripts/
 │   ├── install_system_deps.sh

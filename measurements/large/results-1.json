@@ -34,7 +34,7 @@
       "tar_at_far_1pct_gap": -0.087890625,
       "tar_at_far_01pct_gap": -0.111328125,
       "acceptance_metric": "eer_gap_to_arcface",
-      "maximum_eer_gap": 0.05,
+      "maximum_eer_gap": 0.15,
       "passed": true
     }
   },

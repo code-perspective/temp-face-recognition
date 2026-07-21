@@ -1,4 +1,9 @@
 cryptoface:
+  # Model checkpoint is hosted on Hugging Face and downloaded (and cached) on
+  # first use. To run fully offline, place the file at ckpt_path (below) and it
+  # will be used instead of the download.
+  ckpt_hf_repo:   "halmsu/cryptoface-v1"
+  ckpt_hf_file:   "backbone-64x64.ckpt"
   ckpt_path:      "submission/checkpoints/backbone-64x64.ckpt"
   orion_config:   "submission/orion_configs/cryptoface_net4.yml"
   input_size:     64

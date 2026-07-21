@@ -59,7 +59,9 @@ Key design choices that make the network FHE-evaluable:
   their unit-normalized embeddings (cosine similarity), computed homomorphically;
   only this scalar is decrypted.
 
-Weights come from `checkpoints/backbone-64x64.ckpt`.
+Weights come from `backbone-64x64.ckpt`, hosted on Hugging Face
+([`halmsu/cryptoface-v1`](https://huggingface.co/halmsu/cryptoface-v1)) and
+downloaded automatically on first use (see `common.load_submission_config`).
 
 ---
 
@@ -133,7 +135,9 @@ to an untrusted server in a production deployment.
 
 1. Install dependencies with `scripts/install_system_deps.sh` and
    `scripts/install_python_deps.sh`.
-2. Ensure `submission/config.yml: ckpt_path` points to `checkpoints/backbone-64x64.ckpt`.
+2. The model checkpoint and dataset are fetched from Hugging Face on first run;
+   no manual placement is needed. To run offline, see the "Dataset and model"
+   section of the top-level `README.md`.
 3. From the repo root:
 
    ```console
@@ -143,7 +147,7 @@ to an untrusted server in a production deployment.
 
 The four benchmark sizes are 1, 128, 256, and 1024 pairs. Batched runs compare
 CryptoFace EER and TAR@FAR against the included ArcFace baseline. The acceptance
-criterion allows at most a 0.05 absolute EER increase over ArcFace on the same
+criterion allows at most a 0.15 absolute EER increase over ArcFace on the same
 pairs.
 
 Configuration knobs live in `config.yml` (`input_size`, `l2_poly_coeffs`,

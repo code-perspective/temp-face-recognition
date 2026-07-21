@@ -23,9 +23,6 @@ ${SUDO} apt-get install -y \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
-    git-lfs
-
-git lfs install
+    libxrender-dev
 
 echo "[install_system_deps] done. Next: bash scripts/install_python_deps.sh"

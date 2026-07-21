@@ -45,6 +45,7 @@ network-with-levels.png
 .DS_Store
 .idea/
 .vscode/
+.serena/
 
 # Virtual environments
 virtualenv
@@ -53,6 +54,9 @@ virtualenv
 datasets/*
 # But keep the folder alive with this one file, since some submissions might have fixed datasets
 !datasets/.gitkeep
-# Face verification benchmark dataset (pre-provided, not generated on the fly)
-!datasets/face_dataset.npy
-!datasets/face_dataset_labels.txt
+# Face verification benchmark dataset is hosted on Hugging Face
+# (halmsu/celeba-1024-pairs) and downloaded on first run by generate_dataset.py.
+
+# Model checkpoint is hosted on Hugging Face (halmsu/cryptoface-v1) and
+# downloaded on first run; do not commit local copies.
+submission/checkpoints/

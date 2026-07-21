@@ -42,7 +42,7 @@ def main():
     io_dir.mkdir(parents=True)
     utils.log_step(0, "Init", True)
 
-    # 1. Validate pre-provided face dataset
+    # 1. Provision (download from Hugging Face if absent) and validate the face dataset
     dataset_npy = params.rootdir / "datasets" / "face_dataset.npy"
     subprocess.run(
         [sys.executable, harness_dir / "generate_dataset.py", str(dataset_npy)],
