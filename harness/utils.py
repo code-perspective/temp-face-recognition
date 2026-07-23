@@ -62,8 +62,9 @@ def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int,
                         help='Instance size (0-single/1-small/2-medium/3-large)')
     parser.add_argument('--num_runs', type=int, default=1,
                         help='Number of times to run stages 4-10 (default: 1)')
-    parser.add_argument('--seed', type=int,
-                        help='Random seed for reproducible pair sampling')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducible pair sampling (default: 42). '
+                             'Fixed by default so all submissions sample identical pairs.')
     parser.add_argument('--clrtxt', type=int,
                         help='Set to 1 to force rerun of cleartext reference')
     args = parser.parse_args()
