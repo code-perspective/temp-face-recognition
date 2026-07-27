@@ -40,8 +40,15 @@ _last_timestamp: datetime = None
 # Global variable to store measured times
 _timestamps = {}
 _timestampsStr = {}
+# One-time stage timings (key generation, model preprocessing, ...) measured
+# before the per-run loop. These survive reset_run_state() so they can be
+# reported in every run's results file, matching the ml-inference schema.
+_onetime_timestamps = {}
+_onetime_timestampsStr = {}
 # Global variable to store measured sizes
 _bandwidth = {}
+# One-time bandwidth, such as public and evaluation keys.
+_onetime_bandwidth = {}
 # Global variable to store model quality metrics
 _model_quality = {}
 
@@ -54,14 +61,12 @@ def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int,
     parser.add_argument('size', type=int, choices=range(SINGLE, LARGE+1),
                         help='Instance size (0-single/1-small/2-medium/3-large)')
     parser.add_argument('--num_runs', type=int, default=1,
-                        help='Number of times to run steps 4-9 (default: 1)')
-    parser.add_argument('--seed', type=int,
-                        help='Random seed for dataset and query generation')
+                        help='Number of times to run stages 4-10 (default: 1)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducible pair sampling (default: 42). '
+                             'Fixed by default so all submissions sample identical pairs.')
     parser.add_argument('--clrtxt', type=int,
-                        help='Specify with 1 if to rerun the cleartext computation')
-    parser.add_argument('--batch_size', type=int, default=None,
-                        help='Number of face pairs to sample (default: size-dependent)')
-
+                        help='Set to 1 to force rerun of cleartext reference')
     args = parser.parse_args()
     size = args.size
     seed = args.seed
@@ -69,7 +74,7 @@ def parse_submission_arguments(workload: str) -> Tuple[int, InstanceParams, int,
     clrtxt = args.clrtxt
 
     # Use params.py to get instance parameters
-    params = InstanceParams(size, batch_size=args.batch_size)
+    params = InstanceParams(size)
     return size, params, seed, num_runs, clrtxt
 
 def ensure_directories(rootdir: Path):
@@ -144,7 +149,7 @@ def run_exe_or_python(base, file_name, *args, check=True):
     exe = base / "build" / file_name
 
     if py.exists():
-        cmd = ["python3", str(py), *args]
+        cmd = [sys.executable, str(py), *args]
     elif exe.exists():
         cmd = [str(exe), *args]
     else:
@@ -161,24 +166,64 @@ def human_readable_size(n: int) -> str:
         n /= 1024
     return f"{n:.1f}P"
 
-def save_run(path: Path, size: int = 0):
+def _read_server_reported(iodir: Path) -> dict:
+    """
+    Read the server's self-reported timing, written by server_encrypted_compute
+    to io/<size>/server_reported.json. Returns {} if the file is absent.
+
+    Expected schema (all values in seconds, floats):
+      {
+        "Encrypted computation": <float>,          # pure encrypted compute (excl. setup)
+        "Total": <float>,                          # server wall time for stage 7
+        "additional_measurements": { <label>: <float>, ... }   # optional fine-grained breakdown
+      }
+    """
+    f = iodir / "server_reported.json"
+    if not f.exists():
+        return {}
+    try:
+        return json.loads(f.read_text())
+    except (json.JSONDecodeError, OSError):
+        print(f"         [harness] Warning: could not parse {f}")
+        return {}
+
+
+def save_run(path: Path, size: int = 0, iodir: Path = None):
     """
     Write per-run timing, bandwidth, and (for instance sizes > 0) quality metrics
-    to a JSON file at the given path. Size 0 (single-pair smoke test) omits quality.
+    to a JSON file at the given path, using the ml-inference measurement schema:
+    top-level Timing / Bandwidth / Quality / Server Reported keys.
+    Size 0 (single-pair smoke test) omits Quality.
+
+    One-time stage timings (key generation, model preprocessing) captured before
+    the per-run loop are included in each run's Timing block. Timing["Total"] is
+    the sum of one-time and per-run stage latencies.
     """
     global _timestamps
     global _timestampsStr
+    global _onetime_timestamps
+    global _onetime_timestampsStr
     global _bandwidth
+    global _onetime_bandwidth
     global _model_quality
 
-    total = round(sum(_timestamps.values()), 4)
+    total = round(sum(_onetime_timestamps.values()) + sum(_timestamps.values()), 4)
+    timing = {**_onetime_timestampsStr, **_timestampsStr, "Total": f"{total}s"}
+
     data = {
-        "total_latency_s": total,
-        "per_stage": _timestampsStr,
-        "bandwidth": _bandwidth,
+        "Timing": timing,
+        "Bandwidth": {**_onetime_bandwidth, **_bandwidth},
     }
     if size > 0:
-        data["model_quality"] = _model_quality
+        data["Quality"] = _model_quality
+
+    # Server-reported timing (fine-grained breakdown of stage 7) when available.
+    server_reported = _read_server_reported(iodir) if iodir is not None else {}
+    if server_reported:
+        data["Server Reported"] = {
+            k: (f"{v}s" if isinstance(v, (int, float)) else v)
+            for k, v in server_reported.items()
+        }
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -195,12 +240,27 @@ def log_quality(metrics: dict, tag: str):
         "tar_at_far_01pct": metrics["tar_far_01_percent"],
     }
 
+def log_quality_comparison(comparison: dict):
+    """Store encrypted-versus-ArcFace deltas in the standard Quality block."""
+    if comparison:
+        _model_quality["Comparison to ArcFace baseline"] = comparison
+
 def reset_run_state():
     """
     Reset per-run accumulated timing, bandwidth, and quality state.
     Call at the start of each run so that save_run() writes only that run's data.
+
+    On the first call, the stage timings accumulated before the per-run loop
+    (dataset validation, key generation, model preprocessing) are moved into the
+    one-time store so they persist across runs and appear in every results file.
     """
     global _timestamps, _timestampsStr, _bandwidth, _model_quality
+    global _onetime_timestamps, _onetime_timestampsStr
+    global _onetime_bandwidth
+    if not _onetime_timestamps and _timestamps:
+        _onetime_timestamps    = dict(_timestamps)
+        _onetime_timestampsStr = dict(_timestampsStr)
+        _onetime_bandwidth     = dict(_bandwidth)
     _timestamps    = {}
     _timestampsStr = {}
     _bandwidth     = {}

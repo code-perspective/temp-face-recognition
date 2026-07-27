@@ -1,8 +1,9 @@
-# FHE Benchmarking Suite — Face Verification
+# FHE Benchmarking Suite - Face Verification
 
 This repository contains the harness for the face verification workload of the FHE benchmarking suite of [HomomorphicEncryption.org].
 
-The `face-verification-harness` branch contains a reference submission under the `submission/` subdirectory (CryptoFace, based on Orion/CKKS).
+The repository includes a CryptoFace reference submission under `submission/`,
+implemented with Orion and RNS-CKKS.
 
 Submitters clone this repository and replace the contents of `submission/` with their own implementation. The stage scripts must accept a single positional argument (instance size 0–3) and follow the file I/O contract described below.
 
@@ -10,54 +11,59 @@ Submitters clone this repository and replace the contents of `submission/` with 
 
 ### System dependencies
 
+`scripts/install_system_deps.sh` installs the OS-level packages via `apt`:
+
+- `build-essential`, `python3-dev` — compilers/headers for building native extensions
+- `golang-go` — required by Orion's build
+- `libgraphviz-dev` — pipeline graph visualization
+- `libgl1-mesa-glx`, `libglib2.0-0`, `libsm6`, `libxext6`, `libxrender-dev` — OpenCV/OpenGL runtime libs (InsightFace)
+
 ```console
-sudo apt update
-sudo apt install build-essential
-sudo apt install python3-dev
-sudo apt install golang-go
-sudo apt install libgraphviz-dev
-sudo apt install -y libgl1-mesa-glx
-sudo apt install -y libglib2.0-0 libsm6 libxext6 libxrender-dev
+bash scripts/install_system_deps.sh
 ```
 
 ### Python dependencies
 
-```console
-python3 -m venv bmenv
-source bmenv/bin/activate
-pip install -r requirements.txt
-```
-
-### Dataset (git-lfs)
-
-The benchmark dataset (`datasets/face_dataset.npy`) is stored using git-lfs. Pull it after cloning:
+`requirements.txt` contains the harness and submission dependencies. Orion is
+pinned to the revision used by the validated CryptoFace environment.
 
 ```console
-sudo apt-get install git-lfs
-git lfs install
-git lfs pull
+bash scripts/install_python_deps.sh
 ```
 
-### Submission dependencies (reference submission only)
+### Dataset and model (Hugging Face)
 
-Install Orion and other dependencies required by the CryptoFace reference submission:
+The benchmark dataset and the reference model checkpoint are hosted on Hugging
+Face and downloaded automatically on the first run (cached under
+`~/.cache/huggingface`). No manual step is required — `huggingface_hub` is
+installed with the Python dependencies above.
 
-```console
-bash scripts/build_face_recognition.sh
-pip install torch insightface opencv-python pyyaml
-```
+| Artifact | Hugging Face repo | Pulled by |
+|---|---|---|
+| `face_dataset.npy` + `face_dataset_labels.txt` | [`halmsu/celeba-1024-pairs`](https://huggingface.co/datasets/halmsu/celeba-1024-pairs) (dataset) | harness `generate_dataset.py` → `datasets/` |
+| `backbone-64x64.ckpt` | [`halmsu/cryptoface-v1`](https://huggingface.co/halmsu/cryptoface-v1) (model) | reference submission `common.load_submission_config` |
 
-Set the checkpoint path in `submission/config.yml` before running.
+The dataset contains 1,024 screened CelebA pairs: 512 genuine and 512 impostor
+pairs. It preserves the original variable-size JPEG images. The input generator
+decodes them without resizing, and the reference submission performs face
+detection, landmark alignment, cropping, and only then resizes the aligned crop
+for CryptoFace. The four benchmark variants sample 1, 128, 256, or all 1,024
+pairs from this master set.
+
+**Offline / local override.** To run without network access, place the two
+dataset files in `datasets/` and the checkpoint at the `ckpt_path` in
+`submission/config.yml` (default `submission/checkpoints/backbone-64x64.ckpt`);
+existing local files are always used in preference to the download.
 
 ## Running the benchmark
 
 ```console
-python3 harness/run_submission.py -h
+uv run python harness/run_submission.py -h
 ```
 
 ```
 usage: run_submission.py [-h] [--num_runs NUM_RUNS] [--seed SEED]
-                         [--clrtxt CLRTXT] [--batch_size BATCH_SIZE]
+                         [--clrtxt CLRTXT]
                          {0,1,2,3}
 
 Run Face Verification FHE benchmark.
@@ -69,20 +75,23 @@ options:
   --num_runs NUM_RUNS  Number of times to run stages 4-10 (default: 1)
   --seed SEED          Random seed for reproducible pair sampling
   --clrtxt CLRTXT      Set to 1 to force rerun of cleartext reference
-  --batch_size INT     Override default batch size for the chosen instance
 ```
 
 ### Example: single-pair smoke test
 
 ```console
-python3 harness/run_submission.py 0 --seed 42
+uv run python harness/run_submission.py 0 --seed 42
 ```
 
 ### Example: small size, two runs
 
 ```console
-python3 harness/run_submission.py 1 --seed 3 --num_runs 2
+uv run python harness/run_submission.py 1 --seed 3 --num_runs 2
 ```
+
+The four variants contain 1, 128, 256, and 1024 face pairs. Batched variants
+report EER and TAR at FAR=1%/0.1% for both the encrypted CryptoFace model and
+the included ArcFace baseline, together with their paired metric differences.
 
 Results are written to `measurements/` as JSON files (`results-1.json`, `results-2.json`, …).
 
@@ -93,16 +102,16 @@ The harness drives the following sequence. Stages 2, 3, and 5–9 invoke the sub
 | Stage | Script | Description |
 |-------|--------|-------------|
 | 0 | harness | Remove and re-create `io/<size>/` |
-| 1 | harness | Validate `datasets/face_dataset.npy` |
+| 1 | harness | Download (from Hugging Face if absent) and validate `datasets/face_dataset.npy` |
 | 2 | submission | `client_key_generation` — generate CKKS keys |
 | 3 | submission | `server_preprocess_model` — server preprocessing stub |
 | 4 | harness | `generate_input.py` — sample face pairs into `datasets/<size>/intermediate/` |
 | 5 | submission | `client_preprocess_input` — face alignment and patch extraction |
 | 6 | submission | `client_encode_encrypt_input` — encode and encrypt patches |
-| 7 | submission | `server_encrypted_compute` — encrypted face verification |
+| 7 | submission | `server_encrypted_compute` - five-slot encrypted face verification |
 | 8 | submission | `client_decrypt_decode` — decrypt similarity scores |
 | 9 | submission | `client_postprocess` — optional postprocessing |
-| 10 | harness | ArcFace cleartext reference + EER/TAR@FAR metrics |
+| 10 | harness | ArcFace baseline, EER/TAR@FAR metrics, and paired comparison |
 
 Stages 4–10 repeat for each `--num_runs` iteration.
 
@@ -110,7 +119,7 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 
 | Path | Written by | Read by |
 |------|-----------|---------|
-| `datasets/face_dataset.npy` | pre-provided | harness stage 1, 4 |
+| `datasets/face_dataset.npy` | Hugging Face (`halmsu/celeba-1024-pairs`) | harness stage 1, 4 |
 | `datasets/<size>/intermediate/test_pairs.npz` | harness stage 4 | submission stage 5 |
 | `datasets/<size>/intermediate/test_labels.txt` | harness stage 4 | harness stage 10 |
 | `io/<size>/public_keys/keys.h5` | submission stage 2 | submission stages 6, 7, 8 |
@@ -132,12 +141,12 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 │   ├── params.py               # InstanceParams and batch sizes
 │   ├── utils.py                # Logging, timing, run_exe_or_python
 │   ├── metrics.py              # EER and TAR@FAR calculation
-│   ├── generate_dataset.py     # Validate pre-provided dataset
+│   ├── generate_dataset.py     # Download (from HF) + validate dataset
 │   ├── generate_input.py       # Sample face pairs per run
 │   ├── cleartext_impl.py       # ArcFace plaintext reference
 │   └── verify_result.py        # Standalone metric verification
-├── datasets/
-│   ├── face_dataset.npy        # Pre-provided benchmark dataset (git-lfs)
+├── datasets/                   # Populated on first run from HF (halmsu/celeba-1024-pairs)
+│   ├── face_dataset.npy        # Benchmark dataset (1024 CelebA pairs)
 │   └── face_dataset_labels.txt # Ground-truth labels (0=different, 1=same)
 ├── submission/                 # Reference submission (CryptoFace)
 │   ├── config.yml
@@ -151,10 +160,11 @@ Stages 4–10 repeat for each `--num_runs` iteration.
 │   ├── client_postprocess.py
 │   ├── models/
 │   ├── utils/
-│   ├── checkpoints/            # Place backbone-64x64.ckpt here
+│   ├── checkpoints/            # backbone-64x64.ckpt downloaded from HF (halmsu/cryptoface-v1)
 │   └── orion_configs/
 ├── scripts/
-│   └── build_face_recognition.sh   # Install Orion dependency
+│   ├── install_system_deps.sh
+│   └── install_python_deps.sh
 ├── io/                         # Client↔server communication (generated)
 └── measurements/               # Per-run JSON results (generated)
 ```

@@ -19,20 +19,48 @@ def get_repo_root() -> Path:
     return _REPO_ROOT
 
 
+def _resolve_checkpoint(cfg: dict) -> str:
+    """
+    Return a local path to the model checkpoint.
+
+    If the file at cfg['ckpt_path'] already exists it is used as-is (offline /
+    local override). Otherwise the checkpoint is downloaded from the Hugging
+    Face repo named in cfg['ckpt_hf_repo'] and cached under ~/.cache/huggingface.
+    """
+    local = cfg.get("ckpt_path")
+    if local and Path(local).exists():
+        return local
+
+    repo = cfg.get("ckpt_hf_repo")
+    fname = cfg.get("ckpt_hf_file")
+    if not repo or not fname:
+        raise FileNotFoundError(
+            f"Checkpoint not found at {local!r} and no ckpt_hf_repo/ckpt_hf_file "
+            f"configured to download it from Hugging Face."
+        )
+    from huggingface_hub import hf_hub_download
+    print(f"[submission] Downloading checkpoint {fname} from HF repo {repo} ...",
+          flush=True)
+    return hf_hub_download(repo_id=repo, filename=fname)
+
+
 def load_submission_config() -> dict:
     """
     Reads submission/config.yml relative to repo root.
     Repo root is Path(__file__).parents[1] (submission/ → repo_root/).
     Returns the 'cryptoface' sub-dict from the yaml.
-    Relative paths (ckpt_path, orion_config) are resolved against repo_root.
+    Relative paths (orion_config) are resolved against repo_root; the checkpoint
+    is resolved locally-or-from-Hugging-Face via _resolve_checkpoint.
     """
     config_path = _REPO_ROOT / "submission" / "config.yml"
     with open(config_path) as f:
         full_cfg = yaml.safe_load(f)
     cfg = full_cfg["cryptoface"]
-    for key in ("ckpt_path", "orion_config"):
-        if key in cfg and not Path(cfg[key]).is_absolute():
-            cfg[key] = str((_REPO_ROOT / cfg[key]).resolve())
+    if "ckpt_path" in cfg and not Path(cfg["ckpt_path"]).is_absolute():
+        cfg["ckpt_path"] = str((_REPO_ROOT / cfg["ckpt_path"]).resolve())
+    if "orion_config" in cfg and not Path(cfg["orion_config"]).is_absolute():
+        cfg["orion_config"] = str((_REPO_ROOT / cfg["orion_config"]).resolve())
+    cfg["ckpt_path"] = _resolve_checkpoint(cfg)
     return cfg
 
 
@@ -64,6 +92,22 @@ def parse_stage_args() -> tuple:
     cfg = load_submission_config()
     params = get_face_params(size)
     return size, cfg, params
+
+
+def decode_master_image(elem) -> np.ndarray:
+    """Return a (3, H, W) uint8 RGB array from a master-dataset element.
+
+    The master dataset (datasets/face_dataset.npy) stores original JPEG file
+    bytes to keep the committed file small; this decodes those bytes. Raw uint8
+    arrays are passed through unchanged. Mirrors the harness's decode in
+    generate_input._to_chw_uint8 so the fit sample matches per-run inputs.
+    """
+    import io as _io
+    from PIL import Image
+    if isinstance(elem, (bytes, bytearray, np.bytes_)):
+        img = Image.open(_io.BytesIO(bytes(elem))).convert("RGB")
+        return np.asarray(img, dtype=np.uint8).transpose(2, 0, 1)
+    return np.asarray(elem)
 
 
 def align_face(detector, img_chw_rgb: np.ndarray, output_size: int) -> np.ndarray | None:
@@ -140,10 +184,14 @@ def preprocess_one_image(detector, img_chw_uint8: np.ndarray, input_size: int) -
 
 
 def load_detector():
-    """Load InsightFace FaceAnalysis for face detection and alignment."""
+    """Load InsightFace FaceAnalysis for face detection and alignment.
+
+    Runs on CPU (onnxruntime) so the submission stays portable on machines
+    without a GPU.
+    """
     from insightface.app import FaceAnalysis
-    app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-    app.prepare(ctx_id=-1)
+    app = FaceAnalysis(name='buffalo_l', providers=["CPUExecutionProvider"])
+    app.prepare(ctx_id=-1, det_size=(640, 640))
     return app
 
 

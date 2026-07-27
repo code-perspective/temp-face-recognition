@@ -1,179 +1,484 @@
 #!/usr/bin/env python3
-import os
-os.environ.setdefault("GOGC", "off")           # workers exit after 1 pair — GC wasteful and causes CoW faults
-os.environ.setdefault("GODEBUG", "madvdontneed=1")  # return freed Go pages to OS immediately
+"""Evaluate encrypted face pairs with bounded process and memory lifetimes."""
 
-import sys
+import os
+
+os.environ.setdefault("GOGC", "20")
+os.environ.setdefault("GODEBUG", "madvdontneed=1")
+
 import gc
-import pickle
+import json
 import multiprocessing
-import random
+import pickle
+import sys
 import time
-from dataclasses import dataclass
+import traceback
+from collections import deque
+from multiprocessing.connection import wait
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (
-    parse_stage_args,
-    build_pipeline_load
-)
+from common import build_pipeline_load, parse_stage_args
 
-def _auto_n_workers(gb_per_worker: int):
-    """
-    Return the number of parallel workers that fit in currently available RAM.
-    Reads MemAvailable from /proc/meminfo (sampled after the pipeline is loaded,
-    so the pipeline's footprint is already subtracted).
-    Returns None if /proc/meminfo is unavailable.
-    """
+
+_pipeline = None
+_embedding_dim = None
+_n_patches = None
+_upload_dir = None
+
+
+def _error(exc):
+    return {
+        "status": "fail",
+        "type": type(exc).__name__,
+        "message": str(exc),
+        "traceback": traceback.format_exc(),
+    }
+
+
+def _atomic_write(path, data):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(data)
+    temporary.replace(path)
+
+
+def _branch_entry(pair_idx, image_idx, branch_idx, connection):
+    """Run one image/backbone branch and exit after returning its ciphertext."""
     try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    available_gb = int(line.split()[1]) / (1024 ** 2)  # kB → GB
-                    return max(1, int(available_gb // gb_per_worker))
-    except Exception:
-        return None
+        from orion.backend.python.tensors import CipherTensor
+        from orion.core import scheme
+
+        total_t0 = time.time()
+        payload = pickle.loads(
+            (_upload_dir / f"p{pair_idx:04d}_i{image_idx}_b{branch_idx}.bin").read_bytes()
+        )
+        ciphertext = CipherTensor.deserialize(scheme, payload)
+        deserialize_s = time.time() - total_t0
+
+        forward_t0 = time.time()
+        feature = getattr(_pipeline, f"linear{branch_idx}")(
+            getattr(_pipeline, f"backbone{branch_idx}")(ciphertext)
+        )
+        forward_s = time.time() - forward_t0
+
+        serialize_t0 = time.time()
+        feature_bytes = pickle.dumps(feature.serialize())
+        connection.send({
+            "status": "pass",
+            "pair_idx": pair_idx,
+            "image_idx": image_idx,
+            "branch_idx": branch_idx,
+            "deserialize_s": deserialize_s,
+            "forward_s": forward_s,
+            "serialize_s": time.time() - serialize_t0,
+            "total_s": time.time() - total_t0,
+            "feature_bytes": feature_bytes,
+        })
+    except BaseException as exc:
+        try:
+            connection.send(_error(exc))
+        except BaseException:
+            pass
+        raise
+    finally:
+        connection.close()
 
 
-@dataclass
-class _WorkerEnv:
-    """State set in the main process and inherited by forked workers. Not modified after fork."""
-    pipeline:      object   # compiled Orion pipeline
-    embedding_dim: int
-    n_patches:     int
-    n_pairs:       int
-    n_workers:     int
-    upload_dir:    Path
-
-# Set in main() before forking; inherited by workers via fork()
-_env: _WorkerEnv = None
+def _terminate(processes):
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join(timeout=30)
+        if process.is_alive():
+            process.kill()
+            process.join()
 
 
-def _process_pair(pair_idx):
-    """
-    Process one complete verification pair: both images → inner product → score.
-    Runs in a forked worker; inherits compiled pipeline via _env.
-    Each worker exits after 1 pair (maxtasksperchild=1), releasing all Go memory.
+def _run_branches(ctx, pair_idx, timeout_s):
+    processes, pending, results = [], {}, []
+    started = time.time()
+    try:
+        for image_idx in range(2):
+            for branch_idx in range(_n_patches):
+                receive, send = ctx.Pipe(duplex=False)
+                process = ctx.Process(
+                    target=_branch_entry,
+                    args=(pair_idx, image_idx, branch_idx, send),
+                )
+                process.start()
+                send.close()
+                processes.append(process)
+                pending[receive] = process
 
-    Returns (pair_idx, serialized_score_bytes)
-    """
+        deadline = time.monotonic() + timeout_s
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Pair {pair_idx} branch generation timed out")
+            for connection in wait(list(pending), timeout=min(5.0, remaining)):
+                process = pending.pop(connection)
+                try:
+                    result = connection.recv()
+                except EOFError as exc:
+                    raise RuntimeError(
+                        f"Branch worker {process.pid} exited without a result"
+                    ) from exc
+                finally:
+                    connection.close()
+                if result["status"] != "pass":
+                    raise RuntimeError(
+                        f"Pair {pair_idx} branch failed: {result.get('type')}: "
+                        f"{result.get('message')}\n{result.get('traceback')}"
+                    )
+                results.append(result)
+
+        for process in processes:
+            process.join(timeout=30)
+            if process.exitcode != 0:
+                raise RuntimeError(
+                    f"Branch worker {process.pid} exited with {process.exitcode}"
+                )
+    except BaseException:
+        _terminate(processes)
+        for connection in pending:
+            connection.close()
+        raise
+
+    results.sort(key=lambda item: (item["image_idx"], item["branch_idx"]))
+    return time.time() - started, results
+
+
+def _slot_loop(connection, timeout_s):
+    """Remain FHE-quiescent and fork a clean generation for each pair."""
+    ctx = multiprocessing.get_context("fork")
+    try:
+        while True:
+            command = connection.recv()
+            if command["op"] == "stop":
+                connection.send({"status": "stopped"})
+                return
+            try:
+                wall_s, results = _run_branches(ctx, command["pair_idx"], timeout_s)
+                connection.send({
+                    "status": "pass",
+                    "pair_idx": command["pair_idx"],
+                    "branch_wall_s": wall_s,
+                    "branch_results": results,
+                })
+                del results
+                gc.collect()
+            except BaseException as exc:
+                connection.send(_error(exc))
+                return
+    finally:
+        connection.close()
+
+
+def _aggregate(command, output_dir):
     from orion.backend.python.tensors import CipherTensor
-    from orion.core import scheme as _scheme
-    from utils.he_operations import tree_reduce_add, compute_inner_product_encrypted
+    from orion.core import scheme
+    from utils.he_operations import compute_inner_product_encrypted, tree_reduce_add
 
-    # Stagger the first wave of workers to spread peak memory load.
-    # Worker k sleeps k*[10,20]s; subsequent waves are naturally offset
-    # because predecessors complete at different times.
-    stagger = (pair_idx % _env.n_workers) * random.uniform(10, 20)
-    if stagger > 0:
-        print(f"[server] pair {pair_idx+1}/{_env.n_pairs}: staggering {stagger:.0f}s...", flush=True)
-        time.sleep(stagger)
-
-    t0 = time.time()
-    print(f"[server] pair {pair_idx+1}/{_env.n_pairs}: starting...", flush=True)
-
-    # Load and deserialize ciphertexts for both images (all branches)
-    ctxts = [[], []]
-    for j in range(2):
-        for k in range(_env.n_patches):
-            ctxt_dict = pickle.loads(
-                (_env.upload_dir / f"p{pair_idx:04d}_i{j}_b{k}.bin").read_bytes()
-            )
-            ctxts[j].append(CipherTensor.deserialize(_scheme, ctxt_dict))
-
-    # Backbone + linear for all branches of both images
-    def _run_branches(ciphers):
-        return [
-            getattr(_env.pipeline, f"linear{k}")(getattr(_env.pipeline, f"backbone{k}")(c))
-            for k, c in enumerate(ciphers)
+    pair_idx = command["pair_idx"]
+    started = time.time()
+    by_image = {0: {}, 1: {}}
+    for result in command["branch_results"]:
+        by_image[result["image_idx"]][result["branch_idx"]] = result["feature_bytes"]
+    features = [
+        [
+            CipherTensor.deserialize(scheme, pickle.loads(by_image[image][branch]))
+            for branch in range(_n_patches)
         ]
+        for image in range(2)
+    ]
+    deserialize_s = time.time() - started
 
-    feats1 = _run_branches(ctxts[0])
-    feats2 = _run_branches(ctxts[1])
+    normalization_t0 = time.time()
+    embeddings = [
+        _pipeline.normalization(tree_reduce_add(image_features))
+        for image_features in features
+    ]
+    normalization_s = time.time() - normalization_t0
 
-    # Aggregate + normalize + inner product → scalar
-    emb1  = _env.pipeline.normalization(tree_reduce_add(feats1))
-    emb2  = _env.pipeline.normalization(tree_reduce_add(feats2))
-    score = compute_inner_product_encrypted(emb1, emb2, _env.embedding_dim)
+    inner_product_t0 = time.time()
+    score = compute_inner_product_encrypted(
+        embeddings[0], embeddings[1], _embedding_dim
+    )
+    inner_product_s = time.time() - inner_product_t0
+    serialize_t0 = time.time()
+    score_bytes = pickle.dumps(score.serialize())
+    serialize_s = time.time() - serialize_t0
+    _atomic_write(output_dir / f"p{pair_idx:04d}_score.bin", score_bytes)
 
-    result = pickle.dumps(score.serialize())
-
-    del ctxts, feats1, feats2, emb1, emb2, score
+    del by_image, features, embeddings, score, score_bytes
     gc.collect()
+    return {
+        "pair_idx": pair_idx,
+        "feature_deserialize_s": deserialize_s,
+        "normalization_s": normalization_s,
+        "inner_product_s": inner_product_s,
+        "serialize_s": serialize_s,
+        "total_s": time.time() - started,
+    }
 
-    elapsed = time.time() - t0
-    print(f"[server] pair {pair_idx+1}/{_env.n_pairs}: {elapsed:.1f}s", flush=True)
 
-    return pair_idx, result
+def _aggregator_generation_loop(connection, output_dir):
+    try:
+        while True:
+            command = connection.recv()
+            if command["op"] == "stop":
+                connection.send({"status": "stopped"})
+                return
+            try:
+                connection.send({
+                    "status": "pass",
+                    "result": _aggregate(command, output_dir),
+                })
+            except BaseException as exc:
+                connection.send(_error(exc))
+                return
+    finally:
+        connection.close()
+
+
+def _start(ctx, target, *args):
+    parent, child = ctx.Pipe(duplex=True)
+    process = ctx.Process(target=target, args=(child, *args))
+    process.start()
+    child.close()
+    return process, parent
+
+
+def _stop(process, connection):
+    if process.is_alive() and not connection.closed:
+        try:
+            connection.send({"op": "stop"})
+            if connection.poll(30):
+                connection.recv()
+        except BaseException:
+            pass
+    process.join(timeout=30)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=30)
+    if process.is_alive():
+        process.kill()
+        process.join()
+    if not connection.closed:
+        connection.close()
+
+
+def _aggregator_manager_loop(connection, output_dir, max_pairs):
+    """Create bounded aggregator children from a permanently quiescent parent."""
+    ctx = multiprocessing.get_context("fork")
+    process = child_connection = None
+    generation = generation_pairs = 0
+    try:
+        while True:
+            command = connection.recv()
+            if command["op"] == "stop":
+                if process is not None:
+                    _stop(process, child_connection)
+                connection.send({"status": "stopped"})
+                return
+            if process is None:
+                process, child_connection = _start(
+                    ctx, _aggregator_generation_loop, output_dir
+                )
+                generation += 1
+                generation_pairs = 0
+            child_connection.send(command)
+            response = child_connection.recv()
+            response["generation"] = generation
+            connection.send(response)
+            generation_pairs += 1
+            del command, response
+            gc.collect()
+            if generation_pairs >= max_pairs:
+                _stop(process, child_connection)
+                process = child_connection = None
+    finally:
+        if process is not None:
+            _stop(process, child_connection)
+        connection.close()
+
+
+def _pair_indices(upload_dir):
+    indices = sorted(
+        int(path.name[1:5]) for path in upload_dir.glob("p????_i0_b0.bin")
+    )
+    if not indices:
+        raise FileNotFoundError(f"No encrypted pairs found in {upload_dir}")
+    if indices != list(range(len(indices))):
+        raise ValueError("Encrypted pair indices must be contiguous from zero")
+    missing = [
+        (pair, image, branch)
+        for pair in indices
+        for image in range(2)
+        for branch in range(_n_patches)
+        if not (upload_dir / f"p{pair:04d}_i{image}_b{branch}.bin").exists()
+    ]
+    if missing:
+        raise FileNotFoundError(f"Missing {len(missing)} encrypted branch inputs")
+    return indices
+
+
+def _write_report(params, total_s, setup_s, compute_s, results, pair_slots):
+    branches = [item for result in results for item in result["branch_results"]]
+    aggregations = [result["aggregation"] for result in results]
+    report = {
+        "Encrypted computation": round(compute_s, 4),
+        "Total": round(total_s, 4),
+        "Pipeline load and key setup": round(setup_s, 4),
+        "Backbone forward worker-seconds": round(
+            sum(item["forward_s"] for item in branches), 4
+        ),
+        "Normalization worker-seconds": round(
+            sum(item["normalization_s"] for item in aggregations), 4
+        ),
+        "Inner product worker-seconds": round(
+            sum(item["inner_product_s"] for item in aggregations), 4
+        ),
+        "Mean encrypted wall time per pair": round(compute_s / len(results), 4)
+        if results else 0.0,
+    }
+    path = params.iodir() / "server_reported.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(report, indent=2) + "\n")
+    temporary.replace(path)
 
 
 def main():
-    global _env
-    size, cfg, params = parse_stage_args()
+    global _pipeline, _embedding_dim, _n_patches, _upload_dir
 
-    # Load SK and compile pipeline in memory — safe to fork after this
-    pipeline, _, embedding_dim, n_patches = build_pipeline_load(cfg, params)  # ~25 min compile
+    stage_t0 = time.time()
+    _size, cfg, params = parse_stage_args()
+    pair_slots = int(cfg.get("pair_slots", 5))
+    aggregator_max_pairs = int(cfg.get("aggregator_max_pairs", 10))
+    timeout_s = int(cfg.get("pair_timeout_s", 3600))
+    if min(pair_slots, aggregator_max_pairs, timeout_s) < 1:
+        raise ValueError("Server concurrency settings must be positive")
 
-    upload_dir   = params.iodir() / "ciphertexts_upload"
-    download_dir = params.iodir() / "ciphertexts_download"
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    # Count pairs; skip any already completed
-    n_pairs = sum(1 for _ in upload_dir.glob("p????_i0_b0.bin"))
-    pending = [i for i in range(n_pairs)
-               if not (download_dir / f"p{i:04d}_score.bin").exists()]
-
-    gb_per_worker = cfg["gb_per_worker"]
-    auto_workers = _auto_n_workers(gb_per_worker)
-    if auto_workers is not None:
-        n_workers = min(auto_workers, len(pending))
-        print(f"[server_encrypted_compute] RAM-based worker count: "
-              f"{auto_workers} (at {gb_per_worker} GB each), "
-              f"capped to {n_workers} by pending pairs", flush=True)
-    else:
-        n_workers = min(cfg.get("n_workers", 1), len(pending))
-        print(f"[server_encrypted_compute] Could not read /proc/meminfo; "
-              f"using n_workers={n_workers} from config", flush=True)
-
-    _env = _WorkerEnv(
-        pipeline=pipeline,
-        embedding_dim=embedding_dim,
-        n_patches=n_patches,
-        n_pairs=n_pairs,
-        n_workers=n_workers,
-        upload_dir=upload_dir,
+    setup_t0 = time.time()
+    _pipeline, _level, _embedding_dim, _n_patches = build_pipeline_load(cfg, params)
+    setup_s = time.time() - setup_t0
+    _upload_dir = params.iodir() / "ciphertexts_upload"
+    output_dir = params.iodir() / "ciphertexts_download"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    indices = _pair_indices(_upload_dir)
+    pending = deque(
+        pair for pair in indices
+        if not (output_dir / f"p{pair:04d}_score.bin").exists()
     )
-
-    print(f"[server_encrypted_compute] {n_pairs} pairs total, "
-          f"{len(pending)} pending, {n_pairs - len(pending)} already done, "
-          f"forking {n_workers} workers (pair-level, maxtasksperchild=1)...", flush=True)
-
+    slot_count = min(pair_slots, len(pending))
+    print(
+        f"[server_encrypted_compute] pairs={len(indices)} pending={len(pending)} "
+        f"pair_slots={slot_count} max_branch_workers={2 * _n_patches * slot_count}",
+        flush=True,
+    )
     if not pending:
-        print("[server_encrypted_compute] Nothing to do.", flush=True)
+        _write_report(params, time.time() - stage_t0, setup_s, 0.0, [], slot_count)
         return
 
-    # Fork N workers — maxtasksperchild=1 ensures full memory release after each pair
-    ctx  = multiprocessing.get_context("fork")
-    pool = ctx.Pool(processes=n_workers, maxtasksperchild=1)
+    ctx = multiprocessing.get_context("fork")
+    slots = []
+    for slot_id in range(slot_count):
+        process, connection = _start(ctx, _slot_loop, timeout_s)
+        slots.append({
+            "id": slot_id,
+            "process": process,
+            "connection": connection,
+            "pair": None,
+            "started": None,
+        })
+    aggregator, aggregator_connection = _start(
+        ctx, _aggregator_manager_loop, output_dir, aggregator_max_pairs
+    )
 
-    n_done = 0
+    ready, in_aggregation, results = deque(), None, []
+    compute_t0 = time.time()
     try:
-        for pair_idx, result_bytes in pool.imap_unordered(
-            _process_pair, pending, chunksize=1
-        ):
-            out_path = download_dir / f"p{pair_idx:04d}_score.bin"
-            out_path.write_bytes(result_bytes)
-            n_done += 1
-            print(f"[server] {n_done}/{len(pending)} pending pairs saved", flush=True)
-        pool.close()
-    except Exception:
-        pool.terminate()
-        raise
-    finally:
-        pool.join()
+        while pending or any(s["pair"] is not None for s in slots) or ready or in_aggregation:
+            for slot in slots:
+                if slot["pair"] is None and pending:
+                    slot["pair"] = pending.popleft()
+                    slot["started"] = time.time()
+                    slot["connection"].send({"op": "run", "pair_idx": slot["pair"]})
+                    print(
+                        f"[server] pair {slot['pair'] + 1}/{len(indices)} -> slot {slot['id']}",
+                        flush=True,
+                    )
 
-    gc.collect()
-    print(f"[server_encrypted_compute] Done. {_env.n_pairs} scores → {download_dir}", flush=True)
+            for connection in wait([s["connection"] for s in slots], timeout=0.25):
+                slot = next(s for s in slots if s["connection"] is connection)
+                response = connection.recv()
+                if response["status"] != "pass":
+                    raise RuntimeError(
+                        f"Slot {slot['id']} failed pair {slot['pair']}: "
+                        f"{response.get('message')}\n{response.get('traceback')}"
+                    )
+                ready.append({
+                    "pair_idx": slot["pair"],
+                    "pair_started": slot["started"],
+                    "branch_wall_s": response["branch_wall_s"],
+                    "branch_results": response["branch_results"],
+                })
+                print(
+                    f"[server] pair {slot['pair'] + 1}/{len(indices)} backbones complete "
+                    f"[{response['branch_wall_s']:.1f}s]", flush=True
+                )
+                slot["pair"] = slot["started"] = None
+
+            if in_aggregation is None and ready:
+                in_aggregation = ready.popleft()
+                aggregator_connection.send({
+                    "op": "aggregate",
+                    "pair_idx": in_aggregation["pair_idx"],
+                    "branch_results": in_aggregation["branch_results"],
+                })
+                for branch in in_aggregation["branch_results"]:
+                    del branch["feature_bytes"]
+
+            if in_aggregation is not None and aggregator_connection.poll():
+                response = aggregator_connection.recv()
+                if response["status"] != "pass":
+                    raise RuntimeError(
+                        f"Aggregator failed: {response.get('message')}\n"
+                        f"{response.get('traceback')}"
+                    )
+                in_aggregation["aggregation"] = response["result"]
+                in_aggregation["aggregator_generation"] = response["generation"]
+                in_aggregation["pair_wall_s"] = time.time() - in_aggregation["pair_started"]
+                results.append(in_aggregation)
+                print(
+                    f"[server] pair {in_aggregation['pair_idx'] + 1}/{len(indices)} saved "
+                    f"[{in_aggregation['pair_wall_s']:.1f}s]", flush=True
+                )
+                in_aggregation = None
+
+            now = time.time()
+            for slot in slots:
+                if slot["pair"] is not None and now - slot["started"] > timeout_s:
+                    raise TimeoutError(f"Pair {slot['pair']} timed out")
+                if not slot["process"].is_alive():
+                    raise RuntimeError(f"Slot manager {slot['id']} exited unexpectedly")
+            if not aggregator.is_alive():
+                raise RuntimeError("Aggregator manager exited unexpectedly")
+    finally:
+        for slot in slots:
+            _stop(slot["process"], slot["connection"])
+        _stop(aggregator, aggregator_connection)
+
+    compute_s = time.time() - compute_t0
+    results.sort(key=lambda item: item["pair_idx"])
+    _write_report(
+        params, time.time() - stage_t0, setup_s, compute_s, results, slot_count
+    )
+    print(
+        f"[server_encrypted_compute] Done: {len(results)} pairs in {compute_s:.1f}s "
+        f"({len(results) / compute_s * 3600:.2f} pairs/hour)", flush=True
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,50 @@
+{
+  "Timing": {
+    "Test dataset generation": "0.4195s",
+    "Key Generation": "31.3905s",
+    "Encrypted model preprocessing": "4.4855s",
+    "Input generation": "9.1364s",
+    "Input preprocessing": "317.5641s",
+    "Input encryption": "673.2366s",
+    "Encrypted computation": "17485.6196s",
+    "Result decryption": "59.1834s",
+    "Result postprocessing": "0.0277s",
+    "Harness: Run inference for harness plaintext model": "320.2756s",
+    "Harness: Run quality check": "0.0037s",
+    "Total": "18901.3425s"
+  },
+  "Bandwidth": {
+    "Public and evaluation keys": "9.5M",
+    "Encrypted input": "32.0G",
+    "Encrypted results": "1.5G"
+  },
+  "Quality": {
+    "Encrypted model quality": {
+      "eer": 0.09027777777777779,
+      "tar_at_far_1pct": 0.8333333333333334,
+      "tar_at_far_01pct": 0.8333333333333334
+    },
+    "Harness model quality": {
+      "eer": 0.0625,
+      "tar_at_far_1pct": 0.9305555555555556,
+      "tar_at_far_01pct": 0.9166666666666666
+    },
+    "Comparison to ArcFace baseline": {
+      "eer_gap": 0.02777777777777779,
+      "tar_at_far_1pct_gap": -0.09722222222222221,
+      "tar_at_far_01pct_gap": -0.08333333333333326,
+      "acceptance_metric": "eer_gap_to_arcface",
+      "maximum_eer_gap": 0.15,
+      "passed": true
+    }
+  },
+  "Server Reported": {
+    "Encrypted computation": "15875.4845s",
+    "Total": "17430.9739s",
+    "Pipeline load and key setup": "1504.1648s",
+    "Backbone forward worker-seconds": "411356.1215s",
+    "Normalization worker-seconds": "1112.1314s",
+    "Inner product worker-seconds": "214.6329s",
+    "Mean encrypted wall time per pair": "62.0136s"
+  }
+}
